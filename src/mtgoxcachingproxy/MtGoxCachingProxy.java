@@ -19,14 +19,18 @@ import java.util.Queue;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-public class MtGoxCachingProxy extends Thread implements IOCallback {
+public class MtGoxCachingProxy implements IOCallback {
     private static final int CACHE_SIZE = 10000;
+    private static final int SUCCESSFUL_RUN_SIZE = 1000;
+    private static final int LONGEST_SILENT_TIME = 30 * 1000;
 
     private ServerSocket proxyServer;
     private URL mtGoxUrl = null;
     private Writer clientWriter = null;
     private SocketIO outgoingSocket = null;
     private boolean outgoingConnectionError = false;
+    private boolean hadSuccessfulRun = false;
+    private long timestampLastMessage = 0;
     private Queue<JSONObject> cache;
     private final Object cacheLock = new Object();
 
@@ -38,8 +42,7 @@ public class MtGoxCachingProxy extends Thread implements IOCallback {
         } catch (MalformedURLException ex) { throw new RuntimeException(ex); }
     }
 
-    @Override
-    public void run() {
+    public boolean runProxy() {
         System.out.println("Proxy ready");
         initOutgoingConnection();
 
@@ -47,9 +50,26 @@ public class MtGoxCachingProxy extends Thread implements IOCallback {
         while (!this.outgoingConnectionError) {
             try {
                 // only handle a single client
-                client = proxyServer.accept();
-                System.out.println("New client connected to proxy");
+                proxyServer.setSoTimeout(LONGEST_SILENT_TIME);
+                boolean clientConnected = false;
+                while (!clientConnected) {
+                    try {
+                        client = proxyServer.accept();
+                        clientConnected = true;
+                    } catch (SocketTimeoutException ex) {
+                        /* use timeout to check for activity */
+                        if (System.currentTimeMillis() - this.timestampLastMessage >
+                            LONGEST_SILENT_TIME) {
+                            System.out.println("No activity for a long time - starting over");
+                            this.outgoingConnectionError = true;
+                            break;
+                        }
+                    }
+                }
+                if (this.outgoingConnectionError)
+                    break;
 
+                System.out.println("New client connected to proxy");
                 client.setSoTimeout(500); // don't block longer than 500 ms, to be able
                                           // do run some checks from time to time
                 BufferedReader clientReader = new BufferedReader(new InputStreamReader(client.getInputStream()));
@@ -81,6 +101,12 @@ public class MtGoxCachingProxy extends Thread implements IOCallback {
                         System.out.println("Lost connection to Mt.Gox - starting over");
                         break;
                     }
+                    if (System.currentTimeMillis() - this.timestampLastMessage >
+                            LONGEST_SILENT_TIME) {
+                        System.out.println("No activity for a long time - starting over");
+                        this.outgoingConnectionError = true;
+                        break;
+                    }
                     if (!timeoutOccured) {
                         if (line == null) {
                             System.out.println("Client disconnected");
@@ -95,7 +121,7 @@ public class MtGoxCachingProxy extends Thread implements IOCallback {
             } catch (IOException ex) {
                 System.out.println("Client lost");
             } finally {
-                // clean up
+                // clean up client connection
                 if (client != null) {
                     try {
                         client.close();
@@ -103,12 +129,21 @@ public class MtGoxCachingProxy extends Thread implements IOCallback {
                 }
             }
         }
+
+        // clean up websocket connection
+        if (this.outgoingSocket != null) {
+            this.outgoingSocket.disconnect();
+        }
+
+        return this.hadSuccessfulRun;
     }
 
     private void initOutgoingConnection() {
         System.out.println("Attempting outgoing connection");
         this.outgoingSocket = new SocketIO(this.mtGoxUrl);
         this.outgoingSocket.connect(this);
+        this.timestampLastMessage = System.currentTimeMillis();
+        this.hadSuccessfulRun = false;
     }
 
     private void closeOutgoingConnection() {
@@ -132,9 +167,13 @@ public class MtGoxCachingProxy extends Thread implements IOCallback {
     }
 
     public void onMessage(JSONObject jsono, IOAcknowledge ioa) {
+        this.timestampLastMessage = System.currentTimeMillis();
         synchronized (this.cacheLock) {
             if (this.cache.size() >= CACHE_SIZE) this.cache.remove();
             this.cache.add(jsono);
+
+            if (this.cache.size() >= SUCCESSFUL_RUN_SIZE)
+                this.hadSuccessfulRun = true;
         }
         sendJSON(jsono);
     }
