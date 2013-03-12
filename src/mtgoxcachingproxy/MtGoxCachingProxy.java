@@ -22,7 +22,7 @@ import org.json.JSONObject;
 public class MtGoxCachingProxy implements IOCallback {
     private static final int CACHE_SIZE = 10000;
     private static final int SUCCESSFUL_RUN_SIZE = 1000;
-    private static final int LONGEST_SILENT_TIME = 30 * 1000;
+    private static final int LONGEST_SILENT_TIME = 5 * 60 * 1000;
 
     private ServerSocket proxyServer;
     private URL mtGoxUrl = null;
