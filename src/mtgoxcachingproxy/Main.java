@@ -2,10 +2,9 @@ package mtgoxcachingproxy;
 
 import java.io.IOException;
 import java.net.ServerSocket;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 public class Main {
+    private static final String ORIGIN_HOST = "https://www.bridgewalkerapp.com";
     private static final long DEFAULT_ERROR_WAIT_TIME = 1 * 1000;
     private static final long MAXIMUM_ERROR_WAIT_TIME = 15 * 60 * 1000;
 
@@ -13,9 +12,8 @@ public class Main {
         ServerSocket server = new ServerSocket(10508);
         long current_error_wait_time = DEFAULT_ERROR_WAIT_TIME;
 
-        Logger.getLogger("io.socket").setLevel(Level.WARNING);
         while (true) {
-            MtGoxCachingProxy proxy = new MtGoxCachingProxy(server);
+            MtGoxCachingProxy proxy = new MtGoxCachingProxy(server, ORIGIN_HOST);
             boolean hadSuccessfulRun = proxy.runProxy();
 
             if (hadSuccessfulRun) {

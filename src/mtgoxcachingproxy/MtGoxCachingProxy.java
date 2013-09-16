@@ -1,45 +1,46 @@
 package mtgoxcachingproxy;
 
-import io.socket.IOAcknowledge;
-import io.socket.IOCallback;
-import io.socket.SocketIO;
-import io.socket.SocketIOException;
+import de.roderick.weberknecht.WebSocket;
+import de.roderick.weberknecht.WebSocketEventHandler;
+import de.roderick.weberknecht.WebSocketMessage;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
-import java.net.MalformedURLException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.net.URL;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayDeque;
+import java.util.Map;
 import java.util.Queue;
-import org.json.JSONException;
-import org.json.JSONObject;
+import java.util.TreeMap;
 
-public class MtGoxCachingProxy implements IOCallback {
+public class MtGoxCachingProxy implements WebSocketEventHandler {
     private static final int CACHE_SIZE = 10000;
     private static final int SUCCESSFUL_RUN_SIZE = 1000;
     private static final int LONGEST_SILENT_TIME = 5 * 60 * 1000;
 
     private ServerSocket proxyServer;
-    private URL mtGoxUrl = null;
+    private URI mtGoxUri = null;
+    private String origin = null;
     private Writer clientWriter = null;
-    private SocketIO outgoingSocket = null;
+    private WebSocket outgoingSocket = null;
     private boolean outgoingConnectionError = false;
     private boolean hadSuccessfulRun = false;
     private long timestampLastMessage = 0;
-    private Queue<JSONObject> cache;
+    private Queue<String> cache;
     private final Object cacheLock = new Object();
 
-    public MtGoxCachingProxy(ServerSocket proxyServer) {
-        this.cache = new ArrayDeque<JSONObject>(CACHE_SIZE);
+    public MtGoxCachingProxy(ServerSocket proxyServer, String origin) {
+        this.cache = new ArrayDeque<String>(CACHE_SIZE);
         this.proxyServer = proxyServer;
+        this.origin = origin;
         try {
-            this.mtGoxUrl = new URL("https://socketio.mtgox.com/mtgox");
-        } catch (MalformedURLException ex) { throw new RuntimeException(ex); }
+            this.mtGoxUri = new URI("wss://websocket.mtgox.com/mtgox");
+        } catch (URISyntaxException ex) { throw new RuntimeException(ex); }
     }
 
     public boolean runProxy() {
@@ -84,8 +85,8 @@ public class MtGoxCachingProxy implements IOCallback {
 
                 // send contents of cache
                 synchronized (this.cacheLock) {
-                    for (JSONObject cacheEntry : this.cache) {
-                        sendJSON(cacheEntry);
+                    for (String cacheEntry : this.cache) {
+                        sendToClient(cacheEntry);
                     }
                 }
 
@@ -112,10 +113,7 @@ public class MtGoxCachingProxy implements IOCallback {
                             System.out.println("Client disconnected");
                             break;
                         }
-
-                        try {
-                            this.outgoingSocket.send(new JSONObject(line));
-                        } catch (JSONException ex) { throw new RuntimeException(ex); }
+                        this.outgoingSocket.send(line);
                     }
                 }
             } catch (IOException ex) {
@@ -131,27 +129,29 @@ public class MtGoxCachingProxy implements IOCallback {
         }
 
         // clean up websocket connection
-        if (this.outgoingSocket != null) {
-            this.outgoingSocket.disconnect();
-        }
+        closeOutgoingConnection();
 
         return this.hadSuccessfulRun;
     }
 
     private void initOutgoingConnection() {
+        Map<String, String> extraHeaders = new TreeMap<String, String>();
+        extraHeaders.put("Origin", origin);
+        this.outgoingSocket = new WebSocket(this.mtGoxUri, null, extraHeaders);
+        this.outgoingSocket.setEventHandler(this);
+
         System.out.println("Attempting outgoing connection");
-        this.outgoingSocket = new SocketIO(this.mtGoxUrl);
-        this.outgoingSocket.connect(this);
+        this.outgoingSocket.connect();
         this.timestampLastMessage = System.currentTimeMillis();
         this.hadSuccessfulRun = false;
     }
 
     private void closeOutgoingConnection() {
-        if (this.outgoingSocket != null) { this.outgoingSocket.disconnect(); }
+        if (this.outgoingSocket != null) { this.outgoingSocket.close(); }
     }
 
-    private void sendJSON(JSONObject jsono) {
-        String line = jsono.toString() + "\n";
+    private void sendToClient(String message) {
+        String line = message + "\n";
         if (this.clientWriter != null) {
             try {
                 this.clientWriter.write(line);
@@ -161,38 +161,37 @@ public class MtGoxCachingProxy implements IOCallback {
         }
     }
 
-    public void onConnect() {
+    public void onOpen() {
         synchronized (this.cacheLock) { this.cache.clear(); }
         System.out.println("Outgoing connection established");
     }
 
-    public void onMessage(JSONObject jsono, IOAcknowledge ioa) {
+    public void onMessage(WebSocketMessage message) {
         this.timestampLastMessage = System.currentTimeMillis();
         synchronized (this.cacheLock) {
             if (this.cache.size() >= CACHE_SIZE) this.cache.remove();
-            this.cache.add(jsono);
+            this.cache.add(message.getText());
 
             if (this.cache.size() >= SUCCESSFUL_RUN_SIZE)
                 this.hadSuccessfulRun = true;
         }
-        sendJSON(jsono);
+        sendToClient(message.getText());
     }
 
-    public void onDisconnect() {
+    public void onClose() {
         this.outgoingConnectionError = true;
     }
 
-    public void onError(SocketIOException sioe) {
-        System.out.println("Websocket error: " + sioe);
+    public void onError(IOException exception) {
+        System.out.println("Websocket error: " + exception);
         this.outgoingConnectionError = true;
     }
 
-
-    public void onMessage(String string, IOAcknowledge ioa) {
-        throw new UnsupportedOperationException("Not supported yet.");
+    public void onPing() {
+        /* do nothing */
     }
 
-    public void on(String string, IOAcknowledge ioa, Object... os) {
-        throw new UnsupportedOperationException("Not supported yet.");
+    public void onPong() {
+        /* do nothing */
     }
 }
