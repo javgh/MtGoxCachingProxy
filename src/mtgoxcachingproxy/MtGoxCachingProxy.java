@@ -24,6 +24,10 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
     private static final int LONGEST_SILENT_TIME = 5 * 60 * 1000;
 
     private static final String MTGOX_URI = "wss://websocket.mtgox.com/mtgox";
+    private static final String TICKER_BTCEUR_SUBSCRIBE =
+            "{\"op\":\"mtgox.subscribe\",\"channel\":\"ticker.BTCEUR\"}\n";
+    private static final String DEPTH_BTCEUR_SUBSCRIBE =
+            "{\"op\":\"mtgox.subscribe\",\"channel\":\"depth.BTCEUR\"}\n";
 
     private ServerSocket proxyServer;
     private URI mtGoxUri = null;
@@ -159,6 +163,10 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
     public void onOpen() {
         synchronized (this.cacheLock) { this.cache.clear(); }
         System.out.println("Outgoing connection established");
+
+        System.out.println("Subscribing to additional channels");
+        this.outgoingSocket.send(TICKER_BTCEUR_SUBSCRIBE);
+        this.outgoingSocket.send(DEPTH_BTCEUR_SUBSCRIBE);
     }
 
     public void onMessage(WebSocketMessage message) {
