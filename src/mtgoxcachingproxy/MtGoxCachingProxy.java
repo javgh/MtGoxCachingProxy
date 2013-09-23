@@ -24,12 +24,6 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
     private static final int LONGEST_SILENT_TIME = 5 * 60 * 1000;
 
     private static final String MTGOX_URI = "wss://websocket.mtgox.com/mtgox";
-    private static final String TRADE_CHANNEL_SUBSCRIBE_MSG
-            = "{\"op\":\"subscribe\",\"channel\":\"dbf1dee9-4f2e-4a08-8cb7-748919a71b21\"}\n";
-    private static final String TICKER_CHANNEL_SUBSCRIBE_MSG
-            = "{\"op\":\"subscribe\",\"channel\":\"d5f06780-30a8-4a48-a2f8-7ed181b4a13f\"}\n";
-    private static final String DEPTH_CHANNEL_SUBSCRIBE_MSG
-            = "{\"op\":\"subscribe\",\"channel\":\"24e67e0d-1cad-4cc0-9e7a-f8523ef460fe\"}\n";
 
     private ServerSocket proxyServer;
     private URI mtGoxUri = null;
@@ -84,13 +78,6 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
                 BufferedReader clientReader = new BufferedReader(new InputStreamReader(client.getInputStream()));
                 this.clientWriter = new OutputStreamWriter(client.getOutputStream());
 
-                // fabricate subscribe message
-                // (they might get send twice, but that should not be a problem)
-                this.clientWriter.write(TRADE_CHANNEL_SUBSCRIBE_MSG);
-                this.clientWriter.write(TICKER_CHANNEL_SUBSCRIBE_MSG);
-                this.clientWriter.write(DEPTH_CHANNEL_SUBSCRIBE_MSG);
-                this.clientWriter.flush();
-
                 // send contents of cache
                 synchronized (this.cacheLock) {
                     for (String cacheEntry : this.cache) {
@@ -121,7 +108,7 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
                             System.out.println("Client disconnected");
                             break;
                         }
-                        this.outgoingSocket.send(line);
+                        this.outgoingSocket.send(line + "\n");
                     }
                 }
             } catch (IOException ex) {
