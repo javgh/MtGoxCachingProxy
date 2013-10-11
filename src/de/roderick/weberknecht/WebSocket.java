@@ -98,7 +98,7 @@ public class WebSocket
 			output.write(handshake.getHandshake());
 
 			boolean handshakeComplete = false;
-			int len = 1000;
+			int len = 65536;
 			byte[] buffer = new byte[len];
 			int pos = 0;
 			ArrayList<String> handshakeLines = new ArrayList<String>();
