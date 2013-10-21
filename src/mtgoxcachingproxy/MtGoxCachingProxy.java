@@ -29,6 +29,11 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
     private static final String DEPTH_BTCEUR_SUBSCRIBE =
             "{\"op\":\"mtgox.subscribe\",\"channel\":\"depth.BTCEUR\"}\n";
 
+    /* Activity markers that need to be seen from time to time */
+    private static final String[] ACTIVITY_MARKERS = { "ticker.BTCEUR"
+                                                     , "depth.BTCEUR"
+                                                     };
+
     private ServerSocket proxyServer;
     private URI mtGoxUri = null;
     private String origin = null;
@@ -36,12 +41,14 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
     private WebSocket outgoingSocket = null;
     private boolean outgoingConnectionError = false;
     private boolean hadSuccessfulRun = false;
-    private long timestampLastMessage = 0;
+    private Map<String, Long> activityTimestamps;
     private Queue<String> cache;
     private final Object cacheLock = new Object();
+    private final Object timestampLock = new Object();
 
     public MtGoxCachingProxy(ServerSocket proxyServer, String origin) {
         this.cache = new ArrayDeque<String>(CACHE_SIZE);
+        this.activityTimestamps = new TreeMap<String, Long>();
         this.proxyServer = proxyServer;
         this.origin = origin;
         try {
@@ -65,7 +72,7 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
                         clientConnected = true;
                     } catch (SocketTimeoutException ex) {
                         /* use timeout to check for activity */
-                        if (System.currentTimeMillis() - this.timestampLastMessage >
+                        if (System.currentTimeMillis() - getOldestTimestamp() >
                             LONGEST_SILENT_TIME) {
                             System.out.println("No activity for a long time - starting over");
                             this.outgoingConnectionError = true;
@@ -101,7 +108,7 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
                         System.out.println("Lost connection to Mt.Gox - starting over");
                         break;
                     }
-                    if (System.currentTimeMillis() - this.timestampLastMessage >
+                    if (System.currentTimeMillis() - getOldestTimestamp() >
                             LONGEST_SILENT_TIME) {
                         System.out.println("No activity for a long time - starting over");
                         this.outgoingConnectionError = true;
@@ -141,7 +148,7 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
 
         System.out.println("Attempting outgoing connection");
         this.outgoingSocket.connect();
-        this.timestampLastMessage = System.currentTimeMillis();
+        resetTimestamps();
         this.hadSuccessfulRun = false;
     }
 
@@ -160,6 +167,28 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
         }
     }
 
+    private void resetTimestamps() {
+        for (String marker : ACTIVITY_MARKERS) {
+            recordTimestamp(marker);
+        }
+    }
+
+    private void recordTimestamp(String marker) {
+        synchronized (this.timestampLock) {
+            this.activityTimestamps.put(marker, System.currentTimeMillis());
+        }
+    }
+
+    private long getOldestTimestamp() {
+        synchronized (this.timestampLock) {
+            long oldestTimestamp = System.currentTimeMillis();
+            for (Long timestamp : this.activityTimestamps.values()) {
+                if (timestamp < oldestTimestamp) oldestTimestamp = timestamp;
+            }
+            return oldestTimestamp;
+        }
+    }
+
     public void onOpen() {
         synchronized (this.cacheLock) { this.cache.clear(); }
         System.out.println("Outgoing connection established");
@@ -170,7 +199,13 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
     }
 
     public void onMessage(WebSocketMessage message) {
-        this.timestampLastMessage = System.currentTimeMillis();
+        // update timestamps
+        for (String marker : ACTIVITY_MARKERS) {
+            if (message.getText().contains(marker))
+                recordTimestamp(marker);
+        }
+
+        // update cache
         synchronized (this.cacheLock) {
             if (this.cache.size() >= CACHE_SIZE) this.cache.remove();
             this.cache.add(message.getText());
@@ -178,6 +213,8 @@ public class MtGoxCachingProxy implements WebSocketEventHandler {
             if (this.cache.size() >= SUCCESSFUL_RUN_SIZE)
                 this.hadSuccessfulRun = true;
         }
+
+        // forward message
         sendToClient(message.getText());
     }
 
